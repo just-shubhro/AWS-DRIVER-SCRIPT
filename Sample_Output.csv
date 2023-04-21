@@ -1,0 +1,3 @@
+instance_ID,instance_name,instance_type,ENA_Device_Name,ENA_Device_Version,NVMe_Device_Name,NVMe_Device_Version,EC2_Utility_Name,EC2_Utility_Version,PV_Name,PV_Version
+i-0cae52b1b8d6b4d5d,old _server,t3.micro,Amazon Elastic Network Adapter                                                 ,ENA driver upgraded | Previous version: 1.2.3.0,AWS NVMe Elastic Block Storage Adapter ,Nvme driver upgraded | Previous version: 1.0.0.146,EC2 Windows Utility Device ,1.0.1.98 ,PVDriver ,PV driver upgraded | Previous version: 8.4.3 
+i-056a9503889ac16ad,test1,t3.micro,Amazon Elastic Network Adapter,2.4.0.0      ,AWS NVMe Elastic Block Storage Adapter,1.4.2.26 ,EC2 Windows Utility Device,2.0.0.37 ,PVDriver ,8.4.3 

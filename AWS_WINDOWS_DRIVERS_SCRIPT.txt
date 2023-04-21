@@ -1,0 +1,102 @@
+#!/bin/bash
+instances_ID=$(aws ec2 describe-instances --filters "Name=platform,Values=windows" "Name=instance-state-name,Values=running" --query "Reservations[].Instances[].[InstanceId]" --output text)
+echo "instance_ID,instance_name,instance_type,ENA_Device_Name,ENA_Device_Version,NVMe_Device_Name,NVMe_Device_Version,EC2_Utility_Name,EC2_Utility_Version,PV_Name,PV_Version" | tr -d '\r' >> instance_info.csv
+
+for instance in $instances_ID
+do
+		instance_name=$(aws ec2 describe-instances --filters "Name=instance-id,Values=$instance" --query "Reservations[].Instances[].[Tags[?Key=='Name'].Value|[0]]" --output text)
+        instance_type=$(aws ec2 describe-instances --filters "Name=instance-id,Values=$instance" --query "Reservations[].Instances[].[InstanceType]" --output text)
+        echo "Processing instance: $instance"
+        ena_driver_name=$(aws ssm send-command --document-name "AWS-RunPowerShellScript" --instance-ids $instance --parameters 'commands="Get-WmiObject Win32_PnPSignedDriver | ?{$_.DeviceName -like \"Amazon Elastic Network Adapter\"} | select DeviceName"' --query "Command.CommandId" --output text)
+
+        ena_driver_version=$(aws ssm send-command --document-name "AWS-RunPowerShellScript" --instance-ids $instance --parameters 'commands="Get-WmiObject Win32_PnPSignedDriver | ?{$_.DeviceName -like \"Amazon Elastic Network Adapter\"} | select DriverVersion"' --query "Command.CommandId" --output text)
+
+        ena_driver_manufacturer=$(aws ssm send-command --document-name "AWS-RunPowerShellScript" --instance-ids $instance --parameters 'commands="Get-WmiObject Win32_PnPSignedDriver | ?{$_.DeviceName -like \"Amazon Elastic Network Adapter\"} | select Manufacturer"' --query "Command.CommandId" --output text)
+
+        NVMe_driver_name=$(aws ssm send-command --document-name "AWS-RunPowerShellScript" --instance-ids $instance --parameters 'commands="Get-WmiObject Win32_PnPSignedDriver | ?{$_.DeviceName -like \"AWS NVMe Elastic Block Storage Adapter\"} | select DeviceName"' --query "Command.CommandId" --output text)
+
+        NVMe_driver_version=$(aws ssm send-command --document-name "AWS-RunPowerShellScript" --instance-ids $instance --parameters 'commands="Get-WmiObject Win32_PnPSignedDriver | ?{$_.DeviceName -like \"AWS NVMe Elastic Block Storage Adapter\"} | select DriverVersion"' --query "Command.CommandId" --output text)
+
+        EC2_Utility_driver_name=$(aws ssm send-command --document-name "AWS-RunPowerShellScript" --instance-ids $instance --parameters 'commands="Get-WmiObject Win32_PnPSignedDriver | ?{$_.DeviceName -like \"EC2 Windows Utility Device\"} | select DeviceName"' --query "Command.CommandId" --output text)
+
+        EC2_Utility_driver_version=$(aws ssm send-command --document-name "AWS-RunPowerShellScript" --instance-ids $instance --parameters 'commands="Get-WmiObject Win32_PnPSignedDriver | ?{$_.DeviceName -like \"EC2 Windows Utility Device\"} | select DriverVersion"' --query "Command.CommandId" --output text)
+
+        PV_driver_name=$(aws ssm send-command --document-name "AWS-RunPowerShellScript" --instance-ids $instance --parameters 'commands="Get-ItemProperty HKLM:\SOFTWARE\Amazon\PVDriver | select PSChildName"' --query "Command.CommandId" --output text)
+
+        PV_driver_version=$(aws ssm send-command --document-name "AWS-RunPowerShellScript" --instance-ids $instance --parameters 'commands="Get-ItemProperty HKLM:\SOFTWARE\Amazon\PVDriver | select Version"' --query "Command.CommandId" --output text)
+
+
+        sleep 5
+
+        testing_name=$(aws ssm get-command-invocation --command-id "$ena_driver_name" --instance-id $instance --query "StandardOutputContent" --output text)
+        testing_version=$(aws ssm get-command-invocation --command-id "$ena_driver_version" --instance-id $instance --query "StandardOutputContent" --output text)
+        testing_manufacturer=$(aws ssm get-command-invocation --command-id "$ena_driver_manufacturer" --instance-id $instance --query "StandardOutputContent" --output text)
+		if [[ "$testing_version" == *'2.4.0.0'* ]]; then
+			
+			echo "ENA driver is already up-to-date"
+			device_name=$(echo "$testing_name" | sed -n 's/^Amazon Elastic Network Adapter\s\+\(.*\)$/\0/p' )
+			device_version=$(echo "$testing_version" | awk 'NR==4{print $0}')
+		else
+			echo "ENA driver upgraded now | Previous version : $testing_version"
+			sleep 30
+			uprade=$(aws ssm send-command --document-name "AWS-ConfigureAWSPackage" --instance-ids $instance  --comment "Install ENA package"  --parameters '{"action":["Install"],"installationType":["Uninstall and reinstall"],"name":["AwsEnaNetworkDriver"]}'  --query "Command.CommandId" --output text)
+			sleep 140
+			device_name=$(echo "$testing_name" | sed -n 's/^Amazon Elastic Network Adapter\s\+\(.*\)$/\0/p' )
+			device_version=$(echo "ENA driver upgraded now,Previous version: $testing_version" | awk 'NR==4{print "ENA driver upgraded | Previous version: " $1}')
+		fi
+		
+        testing_nvme_name=$(aws ssm get-command-invocation --command-id "$NVMe_driver_name" --instance-id $instance --query "StandardOutputContent" --output text)
+        testing_nvme_version=$(aws ssm get-command-invocation --command-id "$NVMe_driver_version" --instance-id $instance --query "StandardOutputContent" --output text)
+		
+		if [[ "$testing_nvme_version" == *'1.4.2.26'* ]]; then
+			echo "Nvme driver is already up-to-date"
+			device_nvme_name=$(echo "$testing_nvme_name" | sed -n 's/^AWS NVMe Elastic Block Storage Adapter\s\+\(.*\)$/\0/p' )
+			device_nvme_version=$(echo "$testing_nvme_version" | awk 'NR==4{print $0}')
+		else
+			echo "Nvme driver upgraded now | Previous version : $testing_nvme_version"
+			sleep 20
+			uprade=$(aws ssm send-command --document-name "AWS-ConfigureAWSPackage" --instance-ids $instance  --comment "Install AWSNVMe package"  --parameters '{"action":["Install"],"installationType":["Uninstall and reinstall"],"name":["AWSNVMe"]}'  --query "Command.CommandId" --output text)
+			sleep 140
+			device_nvme_name=$(echo "$testing_nvme_name" | sed -n 's/^AWS NVMe Elastic Block Storage Adapter\s\+\(.*\)$/\0/p' )
+			device_nvme_version=$(echo "Nvme driver upgraded now,Previous version : $testing_nvme_version" | awk 'NR==4{print "Nvme driver upgraded | Previous version: " $1}')
+		fi
+		
+        testing_utility_name=$(aws ssm get-command-invocation --command-id "$EC2_Utility_driver_name" --instance-id $instance --query "StandardOutputContent" --output text)
+        testing_utility_version=$(aws ssm get-command-invocation --command-id "$EC2_Utility_driver_version" --instance-id $instance --query "StandardOutputContent" --output text)
+
+        testing_pv_name=$(aws ssm get-command-invocation --command-id "$PV_driver_name" --instance-id $instance --query "StandardOutputContent" --output text)
+        testing_pv_version=$(aws ssm get-command-invocation --command-id "$PV_driver_version" --instance-id $instance --query "StandardOutputContent" --output text)
+
+		if [[ "$testing_pv_version" == *'8.4.3'* ]]; then
+			echo "PV driver is already up-to-date"
+			device_pv_name=$(echo "$testing_pv_name" | sed -n 's/^PVDriver\s\+\(.*\)$/\0/p' )
+			device_pv_version=$(echo "$testing_pv_version" | awk 'NR==4{print $0}')
+		else
+			echo "PV driver upgraded now | Previous version : $testing_pv_version"
+			sleep 20
+			uprade=$(aws ssm send-command --document-name "AWS-ConfigureAWSPackage" --instance-ids $instance  --comment "Install pv package"  --parameters '{"action":["Install"],"installationType":["Uninstall and reinstall"],"name":["AWSPVDriver"]}'  --query "Command.CommandId" --output text)
+			sleep 140
+			device_pv_name=$(echo "$testing_pv_name" | sed -n 's/^PVDriver\s\+\(.*\)$/\0/p' )
+			device_pv_version=$(echo "PV driver upgraded now | Previous version : $testing_pv_version" | awk 'NR==4{print "PV driver upgraded | Previous version: " $1}')
+		fi
+
+        device_utility_name=$(echo "$testing_utility_name" | sed -n 's/^EC2 Windows Utility Device\s\+\(.*\)$/\0/p' )
+        device_utility_version=$(echo "$testing_utility_version" | awk 'NR==4{print $0}')
+
+        		
+		instance_namess=$(echo "$instance_name" | awk 'NR==4{print $0}')
+		instance_typess=$(echo "$instance_type" | awk 'NR==4{print $0}')
+		
+        echo "Output for instance Device Name $instance: $device_name"
+        echo "Output for instance Device Version $instance: $device_version"
+        echo "Output for instance Device NVMe Name $instance: $device_nvme_name"
+        echo "Output for instance Device Nvme Version $instance: $device_nvme_version"
+        echo "Output for instance Device EC2 Utility Name $instance: $device_utility_name"
+        echo "Output for instance Device EC2 Utility Version $instance: $device_utility_version"
+        echo "Output for instance Device PV Name $instance: $device_pv_name"
+        echo "Output for instance Device PV Version $instance: $device_pv_version"
+
+
+        echo "$instance,$instance_name,$instance_type,$device_name,$device_version,"$device_nvme_name","$device_nvme_version","$device_utility_name","$device_utility_version","$device_pv_name","$device_pv_version" " | tr -d '\r' >> instance_info.csv
+
+done
